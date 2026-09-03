@@ -1111,6 +1111,11 @@ void HighlightDot(PagerState* state, int page) {
     }
     state->current_page = page;
     for (int i = 0; i < state->page_count; ++i) {
+        // 只有一页时 CreateIndicator 不会被调用,dots[] 全是 nullptr。
+        // App 砍到 9 个以内后第一次开机就在这里空指针崩(MTVAL=0x28),厂商从没少于两页。
+        if (state->dots[i] == nullptr) {
+            continue;
+        }
         // Active dot is fully opaque, idle dots are subtle.  We keep both
         // the color the same so the row reads as a connected element.
         lv_opa_t opa = (i == page) ? LV_OPA_COVER : LV_OPA_40;
