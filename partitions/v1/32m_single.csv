@@ -1,0 +1,12 @@
+# ESP-IDF Partition Table — 32MB 单系统(去掉 ESPClaw 双系统后的布局)
+# 主固件 A/B OTA 各 10M;resources 8M;coredump 留着(main/CMakeLists 链接了 espcoredump)
+# Name,         Type, SubType,      Offset,   Size, Flags
+nvsfactory,     data, nvs,         0xA000,   200K,
+nvs,            data, nvs,                ,   840K,
+otadata,        data, ota,                ,     8K,
+phy_init,       data, phy,                ,     4K,
+model,          data, spiffs,             ,   956K,
+ota_0,          app,  ota_0,      0x200000,    10M,
+ota_1,          app,  ota_1,              ,    10M,
+resources,      data, spiffs,             ,     8M,
+coredump,       data, coredump,           ,    64K,

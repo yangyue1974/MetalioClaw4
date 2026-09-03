@@ -15,7 +15,6 @@
 
 #include "screen/boot_screen/boot_screen.h"
 #include "screen/chat_screen/chat_screen.h"
-#include "screen/digital_people_screen/digital_people_screen.h"
 #include "screen/home_screen/home_screen.h"
 
 #include "application.h"
@@ -200,7 +199,6 @@ void LVAdapterDisplay::SetEmotion(const char* const emotion) {
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    DigitalPeopleScreen::SetEmotion(category);
     ChatScreen::SetEmotion(emotion != nullptr ? emotion : "neutral");
     esp_lv_adapter_unlock();
 }
@@ -224,25 +222,15 @@ void LVAdapterDisplay::SetChatMessage(const char* const role, const char* const 
     //   1) 聊天屏在前台 -> 历史滚动气泡（双侧）。
     //   2) 数字人屏在前台 -> user 走底部气泡，bot 走 gif 左上方气泡。
     //   3) 其它屏 -> 直接丢弃，避免在后台无界堆积。
-    const bool chat_active = ChatScreen::IsActive();
-    const bool dp_active   = DigitalPeopleScreen::IsActive();
-    if (!chat_active && !dp_active) {
+    // 数字人屏已删,只剩聊天屏一个消费者。
+    if (!ChatScreen::IsActive()) {
         return;
     }
 
     if (esp_lv_adapter_lock(-1) != ESP_OK) {
         return;
     }
-    if (chat_active) {
-        ChatScreen::AddMessage(content,
-                               is_user ? ChatMsgDir::Right : ChatMsgDir::Left);
-    } else {
-        if (is_user) {
-            DigitalPeopleScreen::ShowUserMessage(content);
-        } else {
-            DigitalPeopleScreen::ShowSystemMessage(content);
-        }
-    }
+    ChatScreen::AddMessage(content, is_user ? ChatMsgDir::Right : ChatMsgDir::Left);
     esp_lv_adapter_unlock();
 }
 

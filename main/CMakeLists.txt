@@ -31,18 +31,8 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/theme_screen/theme_screen.cc"
             "display/screen/info_screen/info_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
-            "display/screen/game_2048_screen/game_2048_screen.cc"
-            "display/screen/calculator_screen/calculator_screen.cc"
-            "display/screen/calendar_screen/calendar_screen.cc"
-            "display/screen/music_screen/music_screen.cc"
-            "display/screen/radio_screen/radio_screen.cc"
-            "display/screen/recording_screen/recording_screen.cc"
-            "display/screen/weather_screen/weather_screen.cc"
-            "display/screen/weather_screen/weather_icon_map.cc"
-            "display/screen/weather_screen/weather_city_list.cc"
             "display/screen/gps_screen/gps_screen.cc"
             "display/screen/camera_screen/camera_screen.cc"
-            "display/screen/vibrate_screen/vibrate_screen.cc"
             "display/screen/backlight_screen/backlight_screen.cc"
             "display/screen/settings_screen/settings_screen.cc"
             "display/screen/settings_screen/settings_common.cc"
@@ -53,50 +43,10 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/settings_screen/settings_charge_tab.cc"
             "display/screen/settings_screen/settings_upgrade_tab.cc"
             "display/screen/settings_screen/settings_bluetooth_tab.cc"
-            "display/screen/call_screen/call_screen.cc"
             "display/screen/bluetooth_screen/bluetooth_screen.cc"
             "display/screen/chat_screen/chat_screen.cc"
             "display/screen/network_screen/network_screen.cc"
-            "display/screen/digital_people_screen/digital_people_screen.cc"
-            "display/screen/digital_people_screen/digital_people_prefs.cc"
-            "display/screen/digital_people_screen/digital_people_settings_screen.cc"
-            "display/screen/level_screen/level_screen.cc"
-            "display/screen/magnet_screen/magnet_screen.cc"
             "display/screen/sd_card_screen/sd_card_screen.cc"
-            "display/screen/pin_test_screen/pin_test_screen.cc"
-            "display/screen/test_screen/test_screen.cc"
-            "display/screen/test_screen/auto_test_screen.cc"
-            "display/screen/test_screen/stress_test_screen.cc"
-            "display/screen/test_screen/stress_demo.c"
-            "display/screen/test_screen/test_ui_common.cc"
-            "display/screen/test_screen/vibrate_motor_test.cc"
-            "display/screen/test_screen/audio_test.cc"
-            "display/screen/test_screen/camera_test.cc"
-            "display/screen/test_screen/sc7a20h_test.cc"
-            "display/screen/test_screen/qmc6309_test.cc"
-            "display/screen/test_screen/sd_card_test.cc"
-            "display/screen/test_screen/cell_4g_test.cc"
-            "display/screen/test_screen/wifi_test.cc"
-            "display/screen/test_screen/gps_test.cc"
-            "display/screen/test_screen/bq27220_test.cc"
-            "display/screen/test_screen/nu1680_test.cc"
-            "display/screen/test_screen/pin_gpio_test.cc"
-            "display/screen/test_screen/screen_color_test.cc"
-            "display/screen/test_screen/touch_panel_test.cc"
-            "display/screen/openclaw_screen/openclaw_screen.cc"
-            "display/screen/ai_image_gen_screen/ai_image_gen_screen.cc"
-            "display/screen/translate_screen/translate_screen.cc"
-            "display/screen/secondary_screen/secondary_screen.cc"
-            "usb_extend_screen/usb_extend_screen.cc"
-            "usb_extend_screen/usb_extend_prefs.cc"
-            "usb_extend_screen/app_usb.c"
-            "usb_extend_screen/app_vendor.c"
-            "usb_extend_screen/app_hid.c"
-            "usb_extend_screen/app_touch.c"
-            "usb_extend_screen/app_uac.cc"
-            "usb_extend_screen/app_lcd_p4.c"
-            "usb_extend_screen/usb_frame.c"
-            "usb_extend_screen/tusb/usb_descriptors.c"
             "display/lvgl_display/lvgl_display.cc"
             "display/lvgl_display/emoji_collection.cc"
             "display/lvgl_display/lvgl_theme.cc"
@@ -119,7 +69,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "i18n" "display" "display/font" "display/lvgl_display" "display/lvgl_display/jpg" "display/screen" "display/screen/boot_screen" "display/screen/ota_screen" "display/screen/home_screen" "display/screen/game_2048_screen" "display/screen/calculator_screen" "display/screen/calendar_screen" "display/screen/music_screen" "display/screen/radio_screen" "display/screen/recording_screen" "display/screen/weather_screen" "display/screen/gps_screen" "display/screen/camera_screen" "display/screen/vibrate_screen" "display/screen/backlight_screen" "display/screen/settings_screen" "display/screen/call_screen" "display/screen/bluetooth_screen" "display/screen/chat_screen" "display/screen/network_screen" "display/screen/digital_people_screen" "display/screen/level_screen" "display/screen/magnet_screen" "display/screen/sd_card_screen" "display/screen/pin_test_screen" "display/screen/test_screen" "display/screen/openclaw_screen" "display/screen/ai_image_gen_screen" "display/screen/translate_screen" "display/screen/secondary_screen" "display/screen/theme_screen" "display/screen/info_screen" "display/screen/standby_screen" "usb_extend_screen" "usb_extend_screen/include" "usb_extend_screen/tusb" "audio" "protocols")
+set(INCLUDE_DIRS "." "i18n" "display" "display/font" "display/lvgl_display" "display/lvgl_display/jpg" "display/screen" "display/screen/boot_screen" "display/screen/ota_screen" "display/screen/home_screen" "display/screen/gps_screen" "display/screen/camera_screen" "display/screen/backlight_screen" "display/screen/settings_screen" "display/screen/bluetooth_screen" "display/screen/chat_screen" "display/screen/network_screen" "display/screen/sd_card_screen" "display/screen/theme_screen" "display/screen/info_screen" "display/screen/standby_screen" "audio" "protocols")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
@@ -302,37 +252,6 @@ target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_driver_tsens)
 
 # panic 写 Flash coredump 分区（需 partitions 含 subtype=coredump）
 target_link_libraries(${COMPONENT_LIB} PRIVATE idf::espcoredump)
-
-# USB 扩展副屏：把自定义 tusb_config / UAC 头注入 tinyusb，覆盖 esp_tinyusb 默认配置。
-# uac_config.h 来自 usb_device_uac（本地 components/ 或 Component Manager）。
-idf_build_get_property(build_components BUILD_COMPONENTS)
-if(tinyusb IN_LIST build_components)
-    set(_xz_tinyusb_name tinyusb)
-else()
-    set(_xz_tinyusb_name espressif__tinyusb)
-endif()
-idf_component_get_property(_xz_tusb_lib ${_xz_tinyusb_name} COMPONENT_LIB)
-if(_xz_tusb_lib)
-    set(_xz_uac_tusb_inc "")
-    if(usb_device_uac IN_LIST build_components)
-        idf_component_get_property(_xz_uac_dir usb_device_uac COMPONENT_DIR)
-        set(_xz_uac_tusb_inc "${_xz_uac_dir}/tusb_uac")
-    elseif(espressif__usb_device_uac IN_LIST build_components)
-        idf_component_get_property(_xz_uac_dir espressif__usb_device_uac COMPONENT_DIR)
-        set(_xz_uac_tusb_inc "${_xz_uac_dir}/tusb_uac")
-    elseif(EXISTS "${PROJECT_DIR}/components/usb_device_uac/tusb_uac")
-        set(_xz_uac_tusb_inc "${PROJECT_DIR}/components/usb_device_uac/tusb_uac")
-    endif()
-    if(NOT _xz_uac_tusb_inc)
-        message(FATAL_ERROR
-            "usb_device_uac not found (need components/usb_device_uac or "
-            "espressif/usb_device_uac). Required for tusb_config.h → uac_config.h")
-    endif()
-    target_include_directories(${_xz_tusb_lib} BEFORE PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/usb_extend_screen/tusb"
-        "${CMAKE_CURRENT_SOURCE_DIR}/usb_extend_screen/include"
-        "${_xz_uac_tusb_inc}")
-endif()
 
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE
@@ -527,5 +446,3 @@ spiffs_create_partition_assets(
     MMAP_SUPPORT_SPNG
     MMAP_SPLIT_HEIGHT 16
 ) 
-
-spiffs_create_partition_image(factory_test ./factory-test-assets FLASH_IN_PROJECT DEPENDS)
