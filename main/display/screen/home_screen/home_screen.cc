@@ -23,6 +23,7 @@
 #include "bq27220_gauge.h"
 #include "settings.h"
 #include "settings_screen/settings_screen.h"
+#include "audiobar_screen/audiobar_screen.h"
 #include "camera_screen/camera_screen.h"
 #include "chat_screen/chat_screen.h"
 #include "gps_screen/gps_screen.h"
@@ -93,6 +94,12 @@ void chat_lifecycle_cb(screen_lifecycle_event_t event) {
 // SD 卡生命周期：转发给 SdCardScreen::LifecycleCallback。
 // LOAD 时挂载 SD 卡并刷新文件列表，UNLOAD 时安全卸载 SD 卡、
 // 断电省电。
+void audiobar_lifecycle_cb(screen_lifecycle_event_t event) {
+    PwrKey_OnScreenLifecycle("audiobar", event);
+    ESP_LOGI(TAG_HOME, "%s: audiobar_screen", event == SCREEN_LIFECYCLE_LOAD ? "load" : "unload");
+    AudiobarScreen::LifecycleCallback(event);
+}
+
 void sd_card_lifecycle_cb(screen_lifecycle_event_t event) {
     PwrKey_OnScreenLifecycle("sd_card", event);
     if (event == SCREEN_LIFECYCLE_LOAD) {
@@ -213,6 +220,16 @@ void LaunchChat(screen_lifecycle_cb_t lifecycle_cb) {
     }
 }
 
+void LaunchAudiobar(screen_lifecycle_cb_t lifecycle_cb) {
+    lv_obj_t* old_scr = lv_screen_active();
+    lv_obj_t* app = AudiobarScreen::Create();
+    screen_attach_lifecycle(app, lifecycle_cb);
+    lv_screen_load(app);
+    if (old_scr != nullptr && old_scr != app) {
+        lv_obj_delete_async(old_scr);
+    }
+}
+
 void LaunchSdCard(screen_lifecycle_cb_t lifecycle_cb) {
     lv_obj_t* old_scr = lv_screen_active();
     lv_obj_t* app = SdCardScreen::Create();
@@ -291,6 +308,7 @@ void info_lifecycle_cb(screen_lifecycle_event_t event) {
 // name 存 zh-CN msgid（源文案）；显示时用 I18n::T(entry.name)。
 constexpr AppEntry kApps[] = {
     {"chat",           "聊天",     LaunchChat,          chat_lifecycle_cb,          true},
+    {"audiobar",       "AUDIOBAR", LaunchAudiobar,      audiobar_lifecycle_cb,      true},
     {"wifi",           "网络配置", LaunchWifi,          wifi_lifecycle_cb,          false},
     {"camera",         "相机",     LaunchCamera,        camera_lifecycle_cb,        false},
     {"gps",            "定位",     LaunchGps,           gps_lifecycle_cb,           true},

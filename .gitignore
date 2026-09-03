@@ -33,3 +33,5 @@ sync-from-xingzhi.sh
 git-commit.sh
 merge_firmware.sh
 local-changes-summary.md
+# Audiolib API key
+main/audio/music/audiolib_secret.h

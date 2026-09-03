@@ -28,6 +28,10 @@ set(SOURCES "audio/audio_codec.cc"
             "display/screen/boot_screen/boot_screen.cc"
             "display/screen/ota_screen/ota_screen.cc"
             "display/screen/home_screen/home_screen.cc"
+            "display/screen/audiobar_screen/audiobar_screen.cc"
+            "audio/demuxer/m4a_demuxer.cc"
+            "audio/music/audiolib_client.cc"
+            "audio/music/music_player.cc"
             "display/screen/theme_screen/theme_screen.cc"
             "display/screen/info_screen/info_screen.cc"
             "display/screen/standby_screen/standby_screen.cc"
@@ -69,7 +73,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             )
 
-set(INCLUDE_DIRS "." "i18n" "display" "display/font" "display/lvgl_display" "display/lvgl_display/jpg" "display/screen" "display/screen/boot_screen" "display/screen/ota_screen" "display/screen/home_screen" "display/screen/gps_screen" "display/screen/camera_screen" "display/screen/backlight_screen" "display/screen/settings_screen" "display/screen/bluetooth_screen" "display/screen/chat_screen" "display/screen/network_screen" "display/screen/sd_card_screen" "display/screen/theme_screen" "display/screen/info_screen" "display/screen/standby_screen" "audio" "protocols")
+set(INCLUDE_DIRS "." "i18n" "display" "display/font" "display/lvgl_display" "display/lvgl_display/jpg" "display/screen" "display/screen/boot_screen" "display/screen/ota_screen" "display/screen/home_screen" "display/screen/audiobar_screen" "display/screen/gps_screen" "display/screen/camera_screen" "display/screen/backlight_screen" "display/screen/settings_screen" "display/screen/bluetooth_screen" "display/screen/chat_screen" "display/screen/network_screen" "display/screen/sd_card_screen" "display/screen/theme_screen" "display/screen/info_screen" "display/screen/standby_screen" "audio" "protocols")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
