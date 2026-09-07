@@ -13,8 +13,11 @@
 #include "audio/audio_codec.h"
 #include "audio/music/music_player.h"
 #include "board.h"
+#include "bt_audio.h"
 #include "home_screen/home_screen.h"
 #include "screen_util.h"
+
+LV_FONT_DECLARE(font_puhui_20_4);
 
 // audiolib_secret.h 不入库;没有的话 main/CMakeLists.txt 在配置阶段生成一个空 key 的。
 // 不用 __has_include:那样 ninja 不知道这个依赖,后来补上 key 文件也不会重编这个 .cc。
@@ -42,6 +45,9 @@ constexpr int kBtnD    = 144;
 constexpr int kColX    = 276;   // 右侧文字列
 constexpr int kRuleY   = 330;
 constexpr int kRowH    = 96;
+constexpr int kOutY    = 288;   // OUT 行(VOL 行下面)
+constexpr int kSheetY  = kRuleY + 2;
+constexpr int kSheetH  = kPanel - kSheetY;
 
 struct Lib { const char* name; const char* id; };
 const Lib kLibs[] = {
@@ -72,6 +78,12 @@ struct Ui {
     lv_obj_t* cur_lib = nullptr;
     lv_obj_t* time = nullptr;
     lv_obj_t* vol_pct = nullptr;
+    lv_obj_t* out_val = nullptr;        // OUT 行的值:SPEAKER / BT · 名字
+    lv_obj_t* sheet = nullptr;          // 输出选择面板,盖在列表上,按需建、关了就删
+    lv_obj_t* sheet_status = nullptr;
+    lv_obj_t* sheet_list = nullptr;
+    lv_obj_t* sheet_spk_dot = nullptr;
+    lv_timer_t* sheet_close_timer = nullptr;
     lv_obj_t* rows[kLibCount] = {};
     lv_obj_t* index[kLibCount] = {};
     lv_obj_t* names[kLibCount] = {};
@@ -83,6 +95,10 @@ Ui s_ui;
 std::atomic<uint32_t> s_gen{0};
 
 MusicPlayer* s_player = nullptr;
+int  s_bt_listener = 0;
+// Audiobar 自己把模块切到模式 2 的话,退出时切回模式 1,小智对话才正常;
+// 用户在设置页手动切的就不动。
+bool s_bt_switched_here = false;
 
 // 进度由音频任务写、LVGL 定时器读。绝不让音频任务碰 LVGL。
 std::atomic<int> s_prog_elapsed{0};
@@ -91,6 +107,16 @@ std::atomic<int> s_prog_total{0};
 bool Alive() { return s_ui.screen != nullptr; }
 
 lv_color_t C(uint32_t v) { return lv_color_hex(v); }
+
+lv_obj_t* Label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color, int ls = 0) {
+    lv_obj_t* l = lv_label_create(parent);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, C(color), 0);
+    if (ls) lv_obj_set_style_text_letter_space(l, ls, 0);
+    return l;
+}
+
 
 void SetRowState(int i, bool on) {
     if (i < 0 || i >= kLibCount || !Alive()) return;
@@ -161,6 +187,231 @@ public:
 };
 Listener s_listener;
 
+// ---- 输出:内置扬声器 / 蓝牙音箱 ----
+// 状态全在 BtAudio 里,这里只画。事件从 UART 任务来,lv_async_call 切到 LVGL 线程。
+// 有没有 ASCII 之外的字(中文设备名要换普惠字体)。LVGL 符号(LV_SYMBOL_*)是
+// U+F000 段,UTF-8 首字节 0xEF,montserrat 自带,不算。
+bool HasNonAscii(const char* s) {
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        if (*p == 0xEF) { p += (p[1] && p[2]) ? 3 : 1; continue; }
+        if (*p >= 0x80) return true;
+        p++;
+    }
+    return false;
+}
+void SetText(lv_obj_t* l, const std::string& txt, const lv_font_t* ascii_font) {
+    lv_obj_set_style_text_font(l, HasNonAscii(txt.c_str()) ? &font_puhui_20_4 : ascii_font, 0);
+    lv_label_set_text(l, txt.c_str());
+}
+
+void CloseSheet() {
+    if (s_ui.sheet_close_timer) { lv_timer_delete(s_ui.sheet_close_timer); s_ui.sheet_close_timer = nullptr; }
+    if (s_ui.sheet) { lv_obj_delete_async(s_ui.sheet); s_ui.sheet = nullptr; }
+    s_ui.sheet_status = nullptr;
+    s_ui.sheet_list = nullptr;
+    s_ui.sheet_spk_dot = nullptr;
+}
+
+void RefreshBt() {
+    if (!Alive()) return;
+    auto& bt = BtAudio::GetInstance();
+    const bool on_bt = bt.OutputIsBluetooth();
+    const auto mode = bt.mode();
+    const auto conn = bt.conn();
+    const std::string name = bt.connected_name();
+
+    if (s_ui.out_val) {
+        if (on_bt) {
+            SetText(s_ui.out_val, LV_SYMBOL_BLUETOOTH "  " + name, &lv_font_montserrat_16);
+            lv_obj_set_style_text_color(s_ui.out_val, C(kAccent), 0);
+        } else if (mode == BtAudio::Mode::kMode2 && conn == BtAudio::Conn::kConnecting) {
+            SetText(s_ui.out_val, LV_SYMBOL_BLUETOOTH "  CONNECTING", &lv_font_montserrat_16);
+            lv_obj_set_style_text_color(s_ui.out_val, C(kMuted), 0);
+        } else {
+            SetText(s_ui.out_val, "SPEAKER", &lv_font_montserrat_16);
+            lv_obj_set_style_text_color(s_ui.out_val, C(kMuted), 0);
+        }
+    }
+    if (!s_ui.sheet) return;
+
+    if (s_ui.sheet_spk_dot) lv_obj_set_style_bg_opa(s_ui.sheet_spk_dot, on_bt ? LV_OPA_TRANSP : LV_OPA_COVER, 0);
+
+    auto devs = bt.devices();
+    if (s_ui.sheet_status) {
+        char buf[96];
+        if (mode != BtAudio::Mode::kMode2)            snprintf(buf, sizeof(buf), "TAP SCAN TO SEARCH");
+        else if (conn == BtAudio::Conn::kScanning)    snprintf(buf, sizeof(buf), "SCANNING...");
+        else if (conn == BtAudio::Conn::kConnecting)  snprintf(buf, sizeof(buf), "CONNECTING...");
+        else if (conn == BtAudio::Conn::kConnected)   snprintf(buf, sizeof(buf), "CONNECTED");
+        else if (devs.empty())                        snprintf(buf, sizeof(buf), "NO DEVICES FOUND");
+        else                                          snprintf(buf, sizeof(buf), "%d DEVICES", (int)devs.size());
+        lv_label_set_text(s_ui.sheet_status, buf);
+        lv_obj_set_style_text_color(s_ui.sheet_status, C(conn == BtAudio::Conn::kConnected ? kAccent : kMuted), 0);
+    }
+    if (s_ui.sheet_list) {
+        lv_obj_clean(s_ui.sheet_list);
+        for (size_t i = 0; i < devs.size(); i++) {
+            const auto& d = devs[i];
+            const bool cur = on_bt && (d.name == name || d.addr == name);
+            lv_obj_t* row = lv_obj_create(s_ui.sheet_list);
+            lv_obj_remove_style_all(row);
+            lv_obj_set_size(row, kPanel, 64);
+            lv_obj_set_style_bg_color(row, C(kRowOn), 0);
+            lv_obj_set_style_bg_opa(row, cur ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
+            lv_obj_set_style_border_color(row, C(kHair), 0);
+            lv_obj_set_style_border_width(row, 1, 0);
+            lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            screen_swipe_back_ignore(row, true);
+            // 地址存在 user_data 里:12 位十六进制,拷一份跟着对象走
+            char* addr = static_cast<char*>(lv_malloc(16));
+            snprintf(addr, 16, "%s", d.addr.c_str());
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                const char* a = static_cast<const char*>(lv_event_get_user_data(e));
+                if (!a) return;
+                ESP_LOGI(TAG, "connect %s", a);
+                BtAudio::GetInstance().Connect(a);   // 发 kConnecting 事件,列表在 async 里重画
+            }, LV_EVENT_CLICKED, addr);
+            lv_obj_add_event_cb(row, [](lv_event_t* e) {
+                lv_free(lv_event_get_user_data(e));
+            }, LV_EVENT_DELETE, addr);
+
+            lv_obj_t* nm = Label(row, "", &lv_font_montserrat_20, cur ? kAccent : kText);
+            SetText(nm, d.name.empty() ? d.addr : d.name, &lv_font_montserrat_20);
+            lv_label_set_long_mode(nm, LV_LABEL_LONG_DOT);
+            lv_obj_set_width(nm, 440);
+            lv_obj_align(nm, LV_ALIGN_LEFT_MID, 42, 0);
+            lv_obj_t* ad = Label(row, d.addr.c_str(), &lv_font_montserrat_16, kDim, 1);
+            lv_obj_align(ad, LV_ALIGN_RIGHT_MID, -42, 0);
+        }
+    }
+}
+
+void AsyncRefreshBt(void* p) {
+    if ((uint32_t)(uintptr_t)p != s_gen.load()) return;
+    RefreshBt();
+}
+
+void OnSheetAutoClose(lv_timer_t*) {
+    if (s_ui.sheet_close_timer) { lv_timer_delete(s_ui.sheet_close_timer); s_ui.sheet_close_timer = nullptr; }
+    CloseSheet();
+}
+
+void AsyncBtConnected(void* p) {
+    if ((uint32_t)(uintptr_t)p != s_gen.load() || !Alive()) return;
+    // 连上默认是什么链路厂商没写;照设置页「音乐模式」的序列走一遍,实测这么用是通的。
+    BtAudio::GetInstance().MusicLink();
+    RefreshBt();
+    if (s_ui.sheet && !s_ui.sheet_close_timer) {
+        s_ui.sheet_close_timer = lv_timer_create(OnSheetAutoClose, 900, nullptr);
+    }
+}
+
+// SCAN:不在模式 2 就先切过去。模块切模式要多久没有文档,AT 序列本身 700ms,
+// 这里等 2 秒再扫;扫不到再按一次 SCAN 就是直接扫。
+void BtScanTask(void*) {
+    auto& bt = BtAudio::GetInstance();
+    if (bt.mode() != BtAudio::Mode::kMode2) {
+        s_bt_switched_here = true;
+        bt.SetMode(BtAudio::Mode::kMode2);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+    bt.Scan();
+    vTaskDelete(nullptr);
+}
+
+void OnScan(lv_event_t*) {
+    xTaskCreate(BtScanTask, "bt_scan", 4096, nullptr, 5, nullptr);
+    if (s_ui.sheet_status) {
+        lv_label_set_text(s_ui.sheet_status, "SCANNING...");
+        lv_obj_set_style_text_color(s_ui.sheet_status, C(kMuted), 0);
+    }
+}
+
+void OnPickSpeaker(lv_event_t*) {
+    auto& bt = BtAudio::GetInstance();
+    if (bt.mode() != BtAudio::Mode::kMode1) {
+        bt.SetMode(BtAudio::Mode::kMode1);
+        s_bt_switched_here = false;
+    }
+    RefreshBt();
+    CloseSheet();
+}
+
+void OpenSheet() {
+    if (s_ui.sheet || !Alive()) return;
+    lv_obj_t* sh = lv_obj_create(s_ui.screen);
+    s_ui.sheet = sh;
+    lv_obj_remove_style_all(sh);
+    lv_obj_set_size(sh, kPanel, kSheetH);
+    lv_obj_set_pos(sh, 0, kSheetY);
+    lv_obj_set_style_bg_color(sh, C(kBg), 0);
+    lv_obj_set_style_bg_opa(sh, LV_OPA_COVER, 0);
+    lv_obj_remove_flag(sh, LV_OBJ_FLAG_SCROLLABLE);
+    screen_swipe_back_ignore(sh, true);
+
+    lv_obj_t* title = Label(sh, "OUTPUT", &lv_font_montserrat_16, kDim, 2);
+    lv_obj_set_pos(title, 42, 20);
+
+    lv_obj_t* close = lv_button_create(sh);
+    lv_obj_remove_style_all(close);
+    lv_obj_set_size(close, 72, 48);
+    lv_obj_align(close, LV_ALIGN_TOP_RIGHT, -30, 8);
+    lv_obj_add_event_cb(close, [](lv_event_t*) { CloseSheet(); }, LV_EVENT_CLICKED, nullptr);
+    screen_swipe_back_ignore(close, true);
+    lv_obj_t* x = Label(close, LV_SYMBOL_CLOSE, &lv_font_montserrat_16, kMuted);
+    lv_obj_center(x);
+
+    // 内置扬声器
+    lv_obj_t* spk = lv_obj_create(sh);
+    lv_obj_remove_style_all(spk);
+    lv_obj_set_size(spk, kPanel, 72);
+    lv_obj_set_pos(spk, 0, 56);
+    lv_obj_set_style_border_side(spk, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_color(spk, C(kHair), 0);
+    lv_obj_set_style_border_width(spk, 1, 0);
+    lv_obj_remove_flag(spk, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(spk, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(spk, OnPickSpeaker, LV_EVENT_CLICKED, nullptr);
+    screen_swipe_back_ignore(spk, true);
+    lv_obj_t* spk_l = Label(spk, "BUILT-IN SPEAKER", &lv_font_montserrat_20, kText, 2);
+    lv_obj_align(spk_l, LV_ALIGN_LEFT_MID, 42, 0);
+    lv_obj_t* dot = lv_obj_create(spk);
+    lv_obj_remove_style_all(dot);
+    lv_obj_set_size(dot, 10, 10);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(dot, C(kAccent), 0);
+    lv_obj_align(dot, LV_ALIGN_RIGHT_MID, -42, 0);
+    s_ui.sheet_spk_dot = dot;
+
+    // 蓝牙:标题 + 状态 + SCAN
+    lv_obj_t* bt_l = Label(sh, "BLUETOOTH", &lv_font_montserrat_16, kDim, 2);
+    lv_obj_set_pos(bt_l, 42, 146);
+    s_ui.sheet_status = Label(sh, "", &lv_font_montserrat_16, kMuted, 1);
+    lv_obj_set_pos(s_ui.sheet_status, 42 + 130, 146);
+    lv_obj_t* scan = lv_button_create(sh);
+    lv_obj_remove_style_all(scan);
+    lv_obj_set_size(scan, 96, 48);
+    lv_obj_align(scan, LV_ALIGN_TOP_RIGHT, -30, 132);
+    lv_obj_add_event_cb(scan, OnScan, LV_EVENT_CLICKED, nullptr);
+    screen_swipe_back_ignore(scan, true);
+    lv_obj_t* scan_l = Label(scan, "SCAN", &lv_font_montserrat_16, kAccent, 2);
+    lv_obj_align(scan_l, LV_ALIGN_RIGHT_MID, -12, 0);
+
+    lv_obj_t* list = lv_obj_create(sh);
+    lv_obj_remove_style_all(list);
+    lv_obj_set_size(list, kPanel, kSheetH - 184);
+    lv_obj_set_pos(list, 0, 184);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+    s_ui.sheet_list = list;
+
+    RefreshBt();
+}
+
 // ---- 事件 ----
 void OnProgressTimer(lv_timer_t*) {
     if (!Alive()) return;
@@ -218,17 +469,10 @@ void GoHome() {
 
 void OnDelete(lv_event_t*) {
     if (s_ui.progress_timer) { lv_timer_delete(s_ui.progress_timer); }
+    if (s_ui.sheet_close_timer) { lv_timer_delete(s_ui.sheet_close_timer); }
+    if (s_bt_listener) { BtAudio::GetInstance().RemoveListener(s_bt_listener); s_bt_listener = 0; }
     s_ui = Ui{};
     s_gen.fetch_add(1);
-}
-
-lv_obj_t* Label(lv_obj_t* parent, const char* text, const lv_font_t* font, uint32_t color, int ls = 0) {
-    lv_obj_t* l = lv_label_create(parent);
-    lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, font, 0);
-    lv_obj_set_style_text_color(l, C(color), 0);
-    if (ls) lv_obj_set_style_text_letter_space(l, ls, 0);
-    return l;
 }
 
 // ---- 进出 app 时的系统音频切换,放 worker 里,不堵 LVGL 线程 ----
@@ -239,6 +483,11 @@ void EnterTask(void*) {
 }
 void LeaveTask(void*) {
     if (s_player) s_player->Shutdown();
+    if (s_bt_switched_here) {
+        // 是我们把模块切去模式 2 的,走的时候切回模式 1,不然小智对话没声
+        s_bt_switched_here = false;
+        BtAudio::GetInstance().SetMode(BtAudio::Mode::kMode1);
+    }
     Application::GetInstance().RestoreSystemAudioAfterStressTest();
     vTaskDelete(nullptr);
 }
@@ -356,6 +605,31 @@ lv_obj_t* AudiobarScreen::Create() {
     snprintf(volbuf, sizeof(volbuf), "%d", vol);
     s_ui.vol_pct = Label(scr, volbuf, &lv_font_montserrat_16, kMuted);
     lv_obj_set_pos(s_ui.vol_pct, kColX + 62 + 300 + 16, 246);
+
+    // ---- OUT 行:点开输出选择面板 ----
+    lv_obj_t* out_btn = lv_obj_create(scr);
+    lv_obj_remove_style_all(out_btn);
+    lv_obj_set_size(out_btn, kPanel - kColX - 40, 40);
+    lv_obj_set_pos(out_btn, kColX, kOutY - 10);
+    lv_obj_remove_flag(out_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(out_btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(out_btn, [](lv_event_t*) { OpenSheet(); }, LV_EVENT_CLICKED, nullptr);
+    screen_swipe_back_ignore(out_btn, true);
+    lv_obj_t* out_tag = Label(out_btn, "OUT", &lv_font_montserrat_16, kDim, 2);
+    lv_obj_align(out_tag, LV_ALIGN_LEFT_MID, 0, 0);
+    s_ui.out_val = Label(out_btn, "SPEAKER", &lv_font_montserrat_16, kMuted);
+    lv_label_set_long_mode(s_ui.out_val, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_ui.out_val, kPanel - kColX - 40 - 62);
+    lv_obj_align(s_ui.out_val, LV_ALIGN_LEFT_MID, 62, 0);
+
+    if (s_bt_listener == 0) {
+        s_bt_listener = BtAudio::GetInstance().AddListener([](BtAudio::Event ev, const std::string&) {
+            void* g = (void*)(uintptr_t)s_gen.load();
+            if (ev == BtAudio::Event::kConnected) lv_async_call(AsyncBtConnected, g);
+            else lv_async_call(AsyncRefreshBt, g);
+        });
+    }
+    RefreshBt();
 
     lv_obj_t* rule = lv_obj_create(scr);
     lv_obj_remove_style_all(rule);

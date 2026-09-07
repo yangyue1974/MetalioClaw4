@@ -42,6 +42,7 @@
 #include "IOExpander.hpp"
 #include "pwr_key_handler.h"
 #include "SimpleUart.hpp"
+#include "bt_audio.h"
 // #include "power_manager.h"
 // #include "power_save_timer.h"
 
@@ -214,9 +215,9 @@ private:
             ESP_LOGI(TAG, "UART initialization failed!");
             return;
         }
-        // 设备开机默认进入蓝牙模式1（AT+RX=2 -> AT+MODE=1，接收模式）。
-        // ApplyDefaultMode() 内部用独立 FreeRTOS task 发送 AT 命令，UI 未
-        // 起来阶段调用是安全的（post_status / lv_async_call 都有守卫）。
+        // 蓝牙模块的状态从此常驻在 BtAudio 里(它接管 UART 回调),设置页和
+        // Audiobar 都只是听众。开机默认模式 1(AT+RX=2 -> AT+MODE=1)。
+        BtAudio::GetInstance().Init();
         BluetoothScreen::ApplyDefaultMode();
     }
 
