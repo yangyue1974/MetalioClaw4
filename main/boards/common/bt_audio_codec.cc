@@ -1,7 +1,6 @@
 #include "bt_audio_codec.h"
 
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <cmath>
 #include <cstring>
 
@@ -97,23 +96,8 @@ int BTAudioCodec::Write(const int16_t *data, int samples)
         buffer[i * 2 + 1] = processed_sample; // 右声道（复制相同的数据）
     }
 
-    // P4 是 I2S 从机,时钟来自蓝牙芯片。它切模式 / 连蓝牙外设的时候会停时钟,这时无限等
-    // 会把整个音频链路(还有 MusicPlayer::Shutdown 的等待)一起卡死。等 1 秒拿不到 DMA 就
-    // 丢这块,写日志,让上层继续跑;声音断一下总比整机挂住强。
-    size_t bytes_written = 0;
-    esp_err_t err = i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t),
-                                      &bytes_written, pdMS_TO_TICKS(1000));
-    if (err == ESP_ERR_TIMEOUT) {
-        static int64_t last_warn_us = 0;
-        int64_t now = esp_timer_get_time();
-        if (now - last_warn_us > 2000000) {
-            last_warn_us = now;
-            ESP_LOGW(TAG, "I2S write timeout: no BCLK from BT SoC? wrote %u/%u bytes",
-                     (unsigned)bytes_written, (unsigned)(samples * 2 * sizeof(int32_t)));
-        }
-    } else {
-        ESP_ERROR_CHECK(err);
-    }
+    size_t bytes_written;
+    ESP_ERROR_CHECK(i2s_channel_write(tx_handle_, buffer.data(), samples * 2 * sizeof(int32_t), &bytes_written, portMAX_DELAY));
     // 返回写入的采样点数量（以单声道计算）
     return bytes_written / (2 * sizeof(int32_t));
 }

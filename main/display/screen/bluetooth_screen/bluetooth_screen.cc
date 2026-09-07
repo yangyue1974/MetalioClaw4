@@ -1,7 +1,8 @@
 #include "bluetooth_screen.h"
 #include "i18n.h"
 
-#include "bt_audio.h"
+#include "IOExpander.hpp"
+#include "SimpleUart.hpp"
 #include "screen_util.h"
 
 #include <cstdio>
@@ -30,10 +31,24 @@ constexpr uint32_t kColorSuccess    = 0x34C759;
 constexpr uint32_t kColorError      = 0xFF3B30;
 constexpr uint32_t kColorScanning   = 0xF59E0B;
 
-// 模式 / 连接状态归 BtAudio(常驻,boards/common/bt_audio.h)。这个页面只画 UI。
-using BtMode    = BtAudio::Mode;
-using ConnState = BtAudio::Conn;
-inline BtAudio& bt() { return BtAudio::GetInstance(); }
+enum class BtMode : uint8_t {
+    kNone = 0,
+    kMode1,
+    kMode2,
+    kMode3,
+};
+
+enum class ConnState : uint8_t {
+    kIdle,
+    kScanning,
+    kConnecting,
+    kConnected,
+};
+
+struct BtDevice {
+    char address[kAddrHexLen + 1];
+    char name[64];
+};
 
 struct UiState {
     lv_obj_t* root               = nullptr;
@@ -48,8 +63,11 @@ struct UiState {
 };
 
 UiState               s_ui;
+BtMode                s_active_mode = BtMode::kNone;
+ConnState             s_conn_state  = ConnState::kIdle;
+std::string           s_rx_buffer;
+std::vector<BtDevice> s_devices;
 bool                  s_screen_active = false;
-int                   s_bt_listener   = 0;
 
 void update_status_label(const char* text, uint32_t color = kColorText) {
     if (s_ui.status_label == nullptr) {
@@ -86,7 +104,7 @@ void refresh_mode_buttons() {
         if (s_ui.mode_btns[i] == nullptr) {
             continue;
         }
-        const bool active = (static_cast<int>(bt().mode()) == i + 1);
+        const bool active = (static_cast<int>(s_active_mode) == i + 1);
         lv_obj_set_style_bg_color(
             s_ui.mode_btns[i],
             lv_color_hex(active ? kColorBtnActive : kColorBtn),
@@ -153,7 +171,11 @@ void async_add_device_item(void* user_data) {
                 if (addr == nullptr) {
                     return;
                 }
-                bt().Connect(addr);
+                char cmd[48];
+                snprintf(cmd, sizeof(cmd), "AT+CONNECT=%s\r\n", addr);
+                SimpleUart::getInstance().sendString(cmd);
+                ESP_LOGI(TAG, "TX: AT+CONNECT=%s", addr);
+                s_conn_state = ConnState::kConnecting;
                 char status[64];
                 snprintf(status, sizeof(status), I18n::T("连接中: %s..."), addr);
                 post_status(status, kColorScanning);
@@ -270,18 +292,25 @@ static void handle_response_line(const std::string& raw_line) {
         return;
     }
 
-    // 状态已由 BtAudio 解析过,这里只更新 UI。
+    ESP_LOGI(TAG, "RX: %s", line.c_str());
+
     if (line.find("SET MODE 1") != std::string::npos) {
+        s_active_mode = BtMode::kMode1;
+        s_conn_state  = ConnState::kIdle;
         post_status(I18n::T("模式1 已设置"), kColorSuccess);
         lv_async_call(async_on_mode1_set, nullptr);
         return;
     }
     if (line.find("SET MODE 2") != std::string::npos) {
+        s_active_mode = BtMode::kMode2;
+        s_conn_state  = ConnState::kIdle;
         post_status(I18n::T("模式2 已设置，可扫描设备"), kColorSuccess);
         lv_async_call(async_on_mode2_set, nullptr);
         return;
     }
     if (line.find("SET MODE 3") != std::string::npos) {
+        s_active_mode = BtMode::kMode3;
+        s_conn_state  = ConnState::kIdle;
         post_status(I18n::T("模式3 已设置"), kColorSuccess);
         lv_async_call(async_on_mode3_set, nullptr);
         return;
@@ -293,6 +322,8 @@ static void handle_response_line(const std::string& raw_line) {
     }
 
     if (line.find("INQUIRING START") != std::string::npos) {
+        s_conn_state = ConnState::kScanning;
+        s_devices.clear();
         post_clear_list();
         post_status(I18n::T("正在扫描..."), kColorScanning);
         return;
@@ -302,6 +333,10 @@ static void handle_response_line(const std::string& raw_line) {
     char name[64];
     if (parse_bt_device_line(line, address, sizeof(address), name,
                              sizeof(name))) {
+        BtDevice dev{};
+        snprintf(dev.address, sizeof(dev.address), "%s", address);
+        snprintf(dev.name, sizeof(dev.name), "%s", name);
+        s_devices.push_back(dev);
         add_device_to_list(address, name);
         char status[96];
         snprintf(status, sizeof(status), I18n::T("发现设备: %s"),
@@ -311,24 +346,28 @@ static void handle_response_line(const std::string& raw_line) {
     }
 
     if (line.find("INQ COMPLETE") != std::string::npos) {
+        s_conn_state = ConnState::kIdle;
         char status[64];
         snprintf(status, sizeof(status), I18n::T("扫描完成，共 %d 个设备"),
-                 static_cast<int>(bt().devices().size()));
+                 static_cast<int>(s_devices.size()));
         post_status(status, kColorSuccess);
         return;
     }
 
     if (line.find("CONNECTING") != std::string::npos) {
+        s_conn_state = ConnState::kConnecting;
         post_status(I18n::T("正在连接..."), kColorScanning);
         return;
     }
 
     if (line.find("CONNECT SUCCESS") != std::string::npos) {
+        s_conn_state = ConnState::kConnected;
         post_status(I18n::T("连接成功"), kColorSuccess);
         return;
     }
 
     if (line.find("CONNECT TIMEOUT") != std::string::npos) {
+        s_conn_state = ConnState::kIdle;
         post_status(I18n::T("连接失败 (超时)"), kColorError);
         return;
     }
@@ -346,14 +385,100 @@ static void handle_response_line(const std::string& raw_line) {
     post_status(line.c_str(), kColorSubtle);
 }
 
-static void send_mode_command(BtMode mode) {
-    switch (mode) {
-        case BtMode::kMode1: post_status(I18n::T("切换模式1..."), kColorScanning); break;
-        case BtMode::kMode2: post_status(I18n::T("切换模式2..."), kColorScanning); break;
-        case BtMode::kMode3: post_status(I18n::T("切换模式3..."), kColorScanning); break;
-        default: return;
+static void on_uart_data(const std::vector<uint8_t>& data) {
+    s_rx_buffer.append(data.begin(), data.end());
+
+    size_t pos = 0;
+    while (true) {
+        size_t nl = s_rx_buffer.find('\n', pos);
+        if (nl == std::string::npos) {
+            break;
+        }
+        std::string line = s_rx_buffer.substr(pos, nl - pos);
+        handle_response_line(line);
+        pos = nl + 1;
     }
-    bt().SetMode(mode);
+    if (pos > 0) {
+        s_rx_buffer.erase(0, pos);
+    }
+
+    if (s_rx_buffer.size() > 2048) {
+        ESP_LOGW(TAG, "RX buffer overflow, clearing");
+        s_rx_buffer.clear();
+    }
+}
+
+struct ModeCmdArgs {
+    BtMode mode;
+};
+
+static void mode_cmd_task(void* param) {
+    auto* args = static_cast<ModeCmdArgs*>(param);
+    SimpleUart& uart = SimpleUart::getInstance();
+
+    switch (args->mode) {
+        case BtMode::kMode1:
+            post_status(I18n::T("切换模式1..."), kColorScanning);
+            uart.sendString("AT+RX=2\r\n");
+            ESP_LOGI(TAG, "TX: AT+RX=2");
+            vTaskDelay(pdMS_TO_TICKS(700));
+            uart.sendString("AT+MODE=1\r\n");
+            ESP_LOGI(TAG, "TX: AT+MODE=1");
+            break;
+        case BtMode::kMode2:
+            post_status(I18n::T("切换模式2..."), kColorScanning);
+            uart.sendString("AT+TX=1\r\n");
+            ESP_LOGI(TAG, "TX: AT+TX=1");
+            vTaskDelay(pdMS_TO_TICKS(700));
+            uart.sendString("AT+MODE=2\r\n");
+            ESP_LOGI(TAG, "TX: AT+MODE=2");
+            break;
+        case BtMode::kMode3:
+            post_status(I18n::T("切换模式3..."), kColorScanning);
+            uart.sendString("AT+RX=1\r\n");
+            ESP_LOGI(TAG, "TX: AT+RX=1");
+            vTaskDelay(pdMS_TO_TICKS(700));
+            uart.sendString("AT+MODE=3\r\n");
+            ESP_LOGI(TAG, "TX: AT+MODE=3");
+            break;
+        default:
+            break;
+    }
+
+    delete args;
+    vTaskDelete(nullptr);
+}
+
+static void send_mode_command(BtMode mode) {
+    if (!SimpleUart::getInstance().isInitialized()) {
+        post_status(I18n::T("UART 未初始化"), kColorError);
+        ESP_LOGE(TAG, "SimpleUart not initialized");
+        return;
+    }
+    auto* args = new ModeCmdArgs{mode};
+    xTaskCreate(mode_cmd_task, "bt_mode_cmd", 4096, args, 5, nullptr);
+}
+
+static void call_mode_task(void* /*param*/) {
+    SimpleUart& uart = SimpleUart::getInstance();
+    post_status(I18n::T("切换通话模式..."), kColorScanning);
+    uart.sendString("AT+PP=1\r\n");
+    ESP_LOGI(TAG, "TX: AT+PP=1");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    uart.sendString("AT+BTSCO=1\r\n");
+    ESP_LOGI(TAG, "TX: AT+BTSCO=1");
+    vTaskDelete(nullptr);
+}
+
+static void music_mode_task(void* /*param*/) {
+    SimpleUart& uart = SimpleUart::getInstance();
+    post_status(I18n::T("切换音乐模式..."), kColorScanning);
+    uart.sendString("AT+BTSCO=0\r\n");
+    ESP_LOGI(TAG, "TX: AT+BTSCO=0");
+    vTaskDelay(pdMS_TO_TICKS(200));
+    uart.sendString("AT+PP=1\r\n");
+    ESP_LOGI(TAG, "TX: AT+PP=1");
+    vTaskDelete(nullptr);
 }
 
 void on_mode_btn_clicked(lv_event_t* e) {
@@ -362,42 +487,66 @@ void on_mode_btn_clicked(lv_event_t* e) {
     send_mode_command(static_cast<BtMode>(idx + 1));
 }
 
-void on_reset_bt_clicked(lv_event_t* /*e*/) {
+static void async_after_bt_reset(void* /*user_data*/) {
+    refresh_mode_buttons();
+    show_mode1_panel(false);
+    show_mode2_panel(false);
+}
+
+static void bt_reset_task(void* /*param*/) {
     post_status(I18n::T("正在复位蓝牙..."), kColorScanning);
-    bt().PowerReset();   // 完成后发 kMode 事件,listener 里按 BtAudio 的模式重画
+    auto& io_expander = IOExpander::getInstance();
+    io_expander.setLevel(IOExpander::Pin::BT_POWER, false);
+    ESP_LOGI(TAG, "BT_POWER off");
+    vTaskDelay(pdMS_TO_TICKS(300));
+    io_expander.setLevel(IOExpander::Pin::BT_POWER, true);
+    ESP_LOGI(TAG, "BT_POWER on");
+    s_active_mode = BtMode::kNone;
+    s_conn_state  = ConnState::kIdle;
+    lv_async_call(async_after_bt_reset, nullptr);
+    post_status(I18n::T("蓝牙电源已复位"), kColorSuccess);
+    vTaskDelete(nullptr);
+}
+
+void on_reset_bt_clicked(lv_event_t* /*e*/) {
+    xTaskCreate(bt_reset_task, "bt_reset", 4096, nullptr, 5, nullptr);
 }
 
 void on_scan_clicked(lv_event_t* /*e*/) {
-    if (bt().mode() != BtMode::kMode2) {
+    if (s_active_mode != BtMode::kMode2) {
         post_status(I18n::T("请先切换到模式2"), kColorError);
         return;
     }
+    if (!SimpleUart::getInstance().isInitialized()) {
+        post_status(I18n::T("UART 未初始化"), kColorError);
+        return;
+    }
+    SimpleUart::getInstance().sendString("AT+INQUIRING\r\n");
+    ESP_LOGI(TAG, "TX: AT+INQUIRING");
+    s_devices.clear();
     post_clear_list();
     post_status(I18n::T("开始扫描..."), kColorScanning);
-    bt().Scan();
 }
 
 void on_call_mode_clicked(lv_event_t* /*e*/) {
-    if (bt().conn() != ConnState::kConnected) {
+    if (s_conn_state != ConnState::kConnected) {
         post_status(I18n::T("请先连接蓝牙设备"), kColorError);
         return;
     }
-    post_status(I18n::T("切换通话模式..."), kColorScanning);
-    bt().CallLink();
+    xTaskCreate(call_mode_task, "bt_call_mode", 4096, nullptr, 5, nullptr);
 }
 
 void on_music_mode_clicked(lv_event_t* /*e*/) {
-    if (bt().conn() != ConnState::kConnected) {
+    if (s_conn_state != ConnState::kConnected) {
         post_status(I18n::T("请先连接蓝牙设备"), kColorError);
         return;
     }
-    post_status(I18n::T("切换音乐模式..."), kColorScanning);
-    bt().MusicLink();
+    xTaskCreate(music_mode_task, "bt_music_mode", 4096, nullptr, 5, nullptr);
 }
 
 void restore_mode_ui() {
     refresh_mode_buttons();
-    switch (bt().mode()) {
+    switch (s_active_mode) {
         case BtMode::kMode1:
             show_mode1_panel(true);
             show_mode2_panel(false);
@@ -420,10 +569,6 @@ void restore_mode_ui() {
     }
 }
 
-static void async_restore_mode_ui(void* /*user_data*/) {
-    restore_mode_ui();
-}
-
 void reset_ui_state() {
     s_ui.root          = nullptr;
     s_ui.status_label    = nullptr;
@@ -436,6 +581,9 @@ void reset_ui_state() {
     for (int i = 0; i < 3; ++i) {
         s_ui.mode_btns[i] = nullptr;
     }
+    s_rx_buffer.clear();
+    s_devices.clear();
+    s_conn_state = ConnState::kIdle;
 }
 
 lv_obj_t* make_mode_button(lv_obj_t* parent, const char* label, int idx) {
@@ -459,6 +607,9 @@ lv_obj_t* make_mode_button(lv_obj_t* parent, const char* label, int idx) {
 }  // namespace
 
 void BluetoothScreen::BuildInto(lv_obj_t* parent) {
+    s_conn_state = ConnState::kIdle;
+    s_rx_buffer.clear();
+    s_devices.clear();
     s_ui.root = parent;
 
     lv_obj_set_style_pad_all(parent, 12, LV_PART_MAIN);
@@ -648,29 +799,20 @@ void BluetoothScreen::ApplyDefaultMode() {
     //    AT+RX=2 / AT+MODE=1（中间 700ms 间隔，与协议匹配）。这条路径
     //    上 post_status() 自带 s_screen_active 守卫，UI 未启动时是
     //    no-op，可以在 InitializeBTAudio() 阶段安全调用。
-    // P4 复位不会给蓝牙模块断电(BT_POWER 是 TCA9555 上的一根线,开机只拉高)。模块上次
-    // 停在模式 2 连着音箱的话,AT+MODE=1 它不理,本机喇叭就一直没声。所以开机先断电再设模式 1。
-    bt().ResetToMode1();
+    s_active_mode = BtMode::kMode1;
+    send_mode_command(BtMode::kMode1);
 }
 
 void BluetoothScreen::LifecycleCallback(screen_lifecycle_event_t event) {
     if (event == SCREEN_LIFECYCLE_LOAD) {
         ESP_LOGI(TAG, "load: bluetooth (embedded in settings)");
         s_screen_active = true;
-        if (s_bt_listener == 0) {
-            s_bt_listener = bt().AddListener([](BtAudio::Event ev, const std::string& line) {
-                if (!s_screen_active) return;
-                if (ev == BtAudio::Event::kMode && line.empty()) {
-                    // 本地发起的模式切换 / 复位(没有回显行):按 BtAudio 记的模式重画
-                    lv_async_call(async_restore_mode_ui, nullptr);
-                    return;
-                }
-                if (!line.empty()) handle_response_line(line);
-            });
-        }
+        s_rx_buffer.clear();
+        SimpleUart::getInstance().registerCallback(on_uart_data);
     } else {
         ESP_LOGI(TAG, "unload: bluetooth (embedded in settings)");
+        SimpleUart::getInstance().registerCallback(
+            std::function<void(const std::vector<uint8_t>&)>());
         s_screen_active = false;
-        if (s_bt_listener) { bt().RemoveListener(s_bt_listener); s_bt_listener = 0; }
     }
 }
