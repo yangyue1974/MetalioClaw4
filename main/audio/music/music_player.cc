@@ -16,6 +16,8 @@
 #include "board.h"
 
 #define TAG "MusicPlayer"
+// 注意:本工程 sdkconfig 开了 newlib nano printf,64 位 / size_t 格式符不支持,
+// 会把可变参数错位,直接 Load access fault。这里只用 32 位格式 + 显式强转。
 
 MusicPlayer::MusicPlayer(AudioCodec* codec, std::string api_key)
     : codec_(codec), client_(api_key), api_key_empty_(api_key.empty()) {}
@@ -183,8 +185,8 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
         return false;
     }
     int64_t t_fetch = (esp_timer_get_time() - t0) / 1000;
-    ESP_LOGI(TAG, "\"%s\" %ds quota %d/%d  (fetch %lldms)", track.title.c_str(),
-             track.duration_sec, track.quota_remaining, track.quota_total, t_fetch);
+    ESP_LOGI(TAG, "\"%s\" %ds quota %d/%d  (fetch %ldms)", track.title.c_str(),
+             track.duration_sec, track.quota_remaining, track.quota_total, (long)t_fetch);
     if (listener_) listener_->OnTrack(library.c_str(), track.title.c_str(),
                                       track.quota_remaining, track.quota_total);
 
@@ -202,8 +204,8 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
             h->Close();
             return decltype(h){};
         }
-        ESP_LOGI(TAG, "stream open %lldms status=%d len=%zu range=%s",
-                 (esp_timer_get_time() - ts) / 1000, st, h->GetBodyLength(),
+        ESP_LOGI(TAG, "stream open %ldms status=%d len=%u range=%s",
+                 (long)((esp_timer_get_time() - ts) / 1000), st, (unsigned)h->GetBodyLength(),
                  range ? range : "-");
         return h;
     };
@@ -280,8 +282,9 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
         }
         if (decoded % 200 == 0) {
             // 四段计时:net / dec / rs / push。卡顿先看这行,别猜。
-            ESP_LOGI(TAG, "f%u/%u net=%lldms dec=%lldms rs=%lldms push=%lldms reads=%u sram=%u",
-                     idx, total, t_net/1000, t_dec/1000, t_rs/1000, t_push/1000,
+            ESP_LOGI(TAG, "f%u/%u net=%ldms dec=%ldms rs=%ldms push=%ldms reads=%u sram=%u",
+                     (unsigned)idx, (unsigned)total, (long)(t_net/1000), (long)(t_dec/1000),
+                     (long)(t_rs/1000), (long)(t_push/1000),
                      (unsigned)reads, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         }
     });
@@ -322,14 +325,14 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
             if (n <= 0) {
                 // 读到 0/负数不一定是播完 —— 网络抖一下也是这个表现。
                 if (retries >= 3) {
-                    ESP_LOGW(TAG, "stream ended at %llu", (unsigned long long)abs_pos);
+                    ESP_LOGW(TAG, "stream ended at %lu", (unsigned long)abs_pos);
                     return;
                 }
                 retries++;
                 char rg[48];
-                snprintf(rg, sizeof(rg), "bytes=%llu-", (unsigned long long)abs_pos);
-                ESP_LOGW(TAG, "read=%d, resume at %llu (%d/3)", n,
-                         (unsigned long long)abs_pos, retries);
+                snprintf(rg, sizeof(rg), "bytes=%lu-", (unsigned long)abs_pos);
+                ESP_LOGW(TAG, "read=%d, resume at %lu (%d/3)", n,
+                         (unsigned long)abs_pos, retries);
                 auto nh = open_stream(rg);
                 if (!nh) return;
                 h->Close();
@@ -352,8 +355,8 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
     if (!aborted && demuxer.HasError() &&
         strstr(demuxer.error(), "not faststart") != nullptr) {
         uint64_t mdat_off = demuxer.mdat_offset(), mdat_sz = demuxer.mdat_size();
-        ESP_LOGW(TAG, "not faststart; mdat at %llu size %llu",
-                 (unsigned long long)mdat_off, (unsigned long long)mdat_sz);
+        ESP_LOGW(TAG, "not faststart; mdat at %lu size %lu",
+                 (unsigned long)mdat_off, (unsigned long)mdat_sz);
         http->Close();
         auto tail = open_stream("bytes=-131072");
         if (tail) {
@@ -370,7 +373,7 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
             for (size_t i = 4; i + 4 <= tb.size(); i++) {
                 if (memcmp(&tb[i], "moov", 4) == 0) { mo = i - 4; break; }
             }
-            ESP_LOGI(TAG, "tail %zu bytes, moov at %d", tb.size(), mo == SIZE_MAX ? -1 : (int)mo);
+            ESP_LOGI(TAG, "tail %u bytes, moov at %d", (unsigned)tb.size(), mo == SIZE_MAX ? -1 : (int)mo);
             if (mo != SIZE_MAX) {
                 uint32_t msz = ((uint32_t)tb[mo] << 24) | ((uint32_t)tb[mo + 1] << 16) |
                                ((uint32_t)tb[mo + 2] << 8) | tb[mo + 3];
@@ -378,7 +381,7 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
                     demuxer.Reset();
                     if (demuxer.LoadMoov(&tb[mo + 8], msz - 8) && open_decoder()) {
                         char rg[48];
-                        snprintf(rg, sizeof(rg), "bytes=%llu-", (unsigned long long)mdat_off);
+                        snprintf(rg, sizeof(rg), "bytes=%lu-", (unsigned long)mdat_off);
                         auto body = open_stream(rg);
                         if (body) {
                             demuxer.StartMdat(mdat_sz);
