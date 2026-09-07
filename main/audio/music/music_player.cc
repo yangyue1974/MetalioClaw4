@@ -114,16 +114,26 @@ void MusicPlayer::OutputRun() {
         std::vector<int16_t> chunk;
         {
             std::unique_lock<std::mutex> lock(pcm_mutex_);
+            bool starved = pcm_queue_.empty() && !paused_.load();
+            int64_t tw = esp_timer_get_time();
             pcm_cv_.wait(lock, [this] {
                 return exit_requested_.load() || (!pcm_queue_.empty() && !paused_.load());
             });
             if (exit_requested_.load()) break;
+            if (starved) {
+                underruns_.fetch_add(1);
+                uint32_t ms = (uint32_t)((esp_timer_get_time() - tw) / 1000);
+                if (ms > starve_max_ms_.load()) starve_max_ms_.store(ms);
+            }
             chunk = std::move(pcm_queue_.front());
             pcm_queue_.pop_front();
             pcm_cv_.notify_all();
         }
         codec_->EnableOutput(true);
+        int64_t to = esp_timer_get_time();
         codec_->OutputData(chunk);   // I2S 从机写,阻塞到 DMA 吃下为止
+        uint32_t oms = (uint32_t)((esp_timer_get_time() - to) / 1000);
+        if (oms > out_max_ms_.load()) out_max_ms_.store(oms);
     }
 }
 
@@ -230,7 +240,9 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
     std::vector<uint8_t> buf(16384);
     bool aborted = false;
     int64_t t_net = 0, t_dec = 0, t_push = 0, t_rs = 0;
+    int64_t l_net = 0, l_dec = 0, l_push = 0, l_rs = 0, l_wall = esp_timer_get_time();
     uint32_t reads = 0;
+    underruns_.store(0); starve_max_ms_.store(0); out_max_ms_.store(0);
 
     demuxer.OnFrame([&](const uint8_t* data, size_t len, uint32_t idx) {
         if (dec == nullptr) return;
@@ -281,11 +293,21 @@ bool MusicPlayer::PlayOneTrack(const std::string& library) {
                                   (int)((int64_t)total * 1024 / rate));
         }
         if (decoded % 200 == 0) {
-            // 四段计时:net / dec / rs / push。卡顿先看这行,别猜。
-            ESP_LOGI(TAG, "f%u/%u net=%ldms dec=%ldms rs=%ldms push=%ldms reads=%u sram=%u",
-                     (unsigned)idx, (unsigned)total, (long)(t_net/1000), (long)(t_dec/1000),
-                     (long)(t_rs/1000), (long)(t_push/1000),
+            // 每 200 帧(≈4.6s 音频)一行,四段都是这一窗口内的耗时,不是累计。卡顿先看这行,别猜:
+            //   wall > 4600ms 且 net 占大头 → 网络供不上;dec/rs 大 → CPU 不够;push 大 → 队列满、输出端慢;
+            //   under>0 → 输出任务取空过(听到的卡顿就是它);outmax 远大于 250 → I2S 写被卡住。
+            int64_t now = esp_timer_get_time();
+            size_t q;
+            { std::lock_guard<std::mutex> lk(pcm_mutex_); q = pcm_queue_.size(); }
+            ESP_LOGI(TAG, "f%u/%u wall=%ldms net=%ldms dec=%ldms rs=%ldms push=%ldms q=%u under=%u starve=%ums outmax=%ums reads=%u sram=%u",
+                     (unsigned)idx, (unsigned)total, (long)((now - l_wall)/1000),
+                     (long)((t_net - l_net)/1000), (long)((t_dec - l_dec)/1000),
+                     (long)((t_rs - l_rs)/1000), (long)((t_push - l_push)/1000),
+                     (unsigned)q, (unsigned)underruns_.load(), (unsigned)starve_max_ms_.load(),
+                     (unsigned)out_max_ms_.load(),
                      (unsigned)reads, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            l_wall = now; l_net = t_net; l_dec = t_dec; l_rs = t_rs; l_push = t_push;
+            out_max_ms_.store(0);
         }
     });
     demuxer.Reset();

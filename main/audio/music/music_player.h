@@ -81,6 +81,10 @@ private:
     std::mutex pcm_mutex_;
     std::condition_variable pcm_cv_;
     std::deque<std::vector<int16_t>> pcm_queue_;
+    // 卡顿排查计数(输出任务写,解码任务在计时行里读):
+    std::atomic<uint32_t> underruns_{0};      // 输出任务来取块时队列是空的 → 供不上,听感就是卡
+    std::atomic<uint32_t> starve_max_ms_{0};  // 空队列等了最久多少毫秒
+    std::atomic<uint32_t> out_max_ms_{0};     // 单次 OutputData 最长阻塞(正常 ≈ 250ms,一块的时长)
 };
 
 #endif  // MUSIC_PLAYER_H_
