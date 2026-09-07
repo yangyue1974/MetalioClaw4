@@ -16,12 +16,9 @@
 #include "home_screen/home_screen.h"
 #include "screen_util.h"
 
-#if __has_include("audio/music/audiolib_secret.h")
+// audiolib_secret.h 不入库;没有的话 main/CMakeLists.txt 在配置阶段生成一个空 key 的。
+// 不用 __has_include:那样 ninja 不知道这个依赖,后来补上 key 文件也不会重编这个 .cc。
 #include "audio/music/audiolib_secret.h"
-#else
-// 没有 key 也要能编:界面照常,点曲库时提示 NO API KEY。
-#define AUDIOLIB_API_KEY ""
-#endif
 
 namespace {
 

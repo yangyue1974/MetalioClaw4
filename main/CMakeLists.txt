@@ -75,6 +75,14 @@ set(SOURCES "audio/audio_codec.cc"
 
 set(INCLUDE_DIRS "." "i18n" "display" "display/font" "display/lvgl_display" "display/lvgl_display/jpg" "display/screen" "display/screen/boot_screen" "display/screen/ota_screen" "display/screen/home_screen" "display/screen/audiobar_screen" "display/screen/gps_screen" "display/screen/camera_screen" "display/screen/backlight_screen" "display/screen/settings_screen" "display/screen/bluetooth_screen" "display/screen/chat_screen" "display/screen/network_screen" "display/screen/sd_card_screen" "display/screen/theme_screen" "display/screen/info_screen" "display/screen/standby_screen" "audio" "protocols")
 
+# Audiobar 的 API key 不入库。文件不存在就生成一个空 key 的,保证能编;
+# 作为真实的 #include 依赖,用户填上 key 后 ninja 会重编用到它的文件。
+set(AUDIOLIB_SECRET "${CMAKE_CURRENT_SOURCE_DIR}/audio/music/audiolib_secret.h")
+if(NOT EXISTS "${AUDIOLIB_SECRET}")
+    file(WRITE "${AUDIOLIB_SECRET}" "#pragma once\n#define AUDIOLIB_API_KEY \"\"\n")
+    message(WARNING "audiolib_secret.h 不存在,已生成空 key;Audiobar 会提示 NO API KEY。照 audiolib_secret.h.example 填。")
+endif()
+
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
 list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
