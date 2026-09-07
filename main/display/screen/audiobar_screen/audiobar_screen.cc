@@ -493,6 +493,9 @@ void OnDelete(lv_event_t*) {
 void EnterTask(void*) {
     Application::GetInstance().StopSystemAudioForStressTest();
     if (s_player) s_player->Start();
+    // 模块不在模式 1 又没连着蓝牙外设(上次遗留的模式 2),本机喇叭不会响:断电回模式 1。
+    auto& bt = BtAudio::GetInstance();
+    if (bt.mode() != BtAudio::Mode::kMode1 && !bt.OutputIsBluetooth()) bt.ResetToMode1();
     vTaskDelete(nullptr);
 }
 void LeaveTask(void*) {

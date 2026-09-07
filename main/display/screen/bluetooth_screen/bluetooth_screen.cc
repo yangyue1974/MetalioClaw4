@@ -648,7 +648,9 @@ void BluetoothScreen::ApplyDefaultMode() {
     //    AT+RX=2 / AT+MODE=1（中间 700ms 间隔，与协议匹配）。这条路径
     //    上 post_status() 自带 s_screen_active 守卫，UI 未启动时是
     //    no-op，可以在 InitializeBTAudio() 阶段安全调用。
-    bt().SetMode(BtMode::kMode1);
+    // P4 复位不会给蓝牙模块断电(BT_POWER 是 TCA9555 上的一根线,开机只拉高)。模块上次
+    // 停在模式 2 连着音箱的话,AT+MODE=1 它不理,本机喇叭就一直没声。所以开机先断电再设模式 1。
+    bt().ResetToMode1();
 }
 
 void BluetoothScreen::LifecycleCallback(screen_lifecycle_event_t event) {
