@@ -161,6 +161,30 @@ void BtAudio::PowerReset() {
     }, "bt_reset", 4096, this, 5, nullptr);
 }
 
+void BtAudio::ResetToMode1() {
+    xTaskCreate([](void* p) {
+        auto* self = static_cast<BtAudio*>(p);
+        auto& io = IOExpander::getInstance();
+        io.setLevel(IOExpander::Pin::BT_POWER, false);
+        ESP_LOGI(TAG, "BT_POWER off (reset to mode 1)");
+        vTaskDelay(pdMS_TO_TICKS(300));
+        io.setLevel(IOExpander::Pin::BT_POWER, true);
+        ESP_LOGI(TAG, "BT_POWER on");
+        {
+            std::lock_guard<std::mutex> lk(self->mu_);
+            self->mode_ = Mode::kNone;
+            self->conn_ = Conn::kIdle;
+            self->connected_name_.clear();
+            self->pending_addr_.clear();
+        }
+        self->Emit(Event::kMode, "");
+        // 开机时板级在上电后 ~1 秒就发模式 1 指令,模块能收。这里留 1.5 秒。
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        self->SetMode(Mode::kMode1);
+        vTaskDelete(nullptr);
+    }, "bt_reset1", 4096, this, 5, nullptr);
+}
+
 BtAudio::Mode BtAudio::mode() const { std::lock_guard<std::mutex> lk(mu_); return mode_; }
 BtAudio::Conn BtAudio::conn() const { std::lock_guard<std::mutex> lk(mu_); return conn_; }
 std::string BtAudio::connected_name() const { std::lock_guard<std::mutex> lk(mu_); return connected_name_; }

@@ -74,6 +74,12 @@ int main() {
     feed("\r\nSET MODE 3\r\n");
     assert(bt.mode() == BtAudio::Mode::kMode3);
 
+    // 断电重启回模式 1(桩里的任务同步跑完):状态清零后立刻是模式 1
+    bt.Connect("AABBCCDDEEFF");
+    feed("CONNECT SUCCESS\r\n");
+    bt.ResetToMode1();
+    assert(bt.mode() == BtAudio::Mode::kMode1 && !bt.OutputIsBluetooth());
+
     assert(events > 10);
     printf("bt_audio_test: ALL PASS (%d events)\n", events);
     return 0;

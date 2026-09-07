@@ -347,7 +347,8 @@ void OnScan(lv_event_t*) {
 
 void OnPickSpeaker(lv_event_t*) {
     auto& bt = BtAudio::GetInstance();
-    if (bt.mode() != BtAudio::Mode::kMode1) bt.SetMode(BtAudio::Mode::kMode1);
+    // 从模式 2 回本机必须断电重启模块:链路活着时 AT+MODE=1 不生效,声音还在音箱上。
+    if (bt.mode() != BtAudio::Mode::kMode1) bt.ResetToMode1();
     RefreshBt();
     CloseSheet();
 }
@@ -497,8 +498,8 @@ void EnterTask(void*) {
 void LeaveTask(void*) {
     if (s_player) s_player->Shutdown();
     if (BtAudio::GetInstance().mode() != BtAudio::Mode::kMode1) {
-        // 走的时候一律回模式 1,不然小智对话没声(音箱没麦)
-        BtAudio::GetInstance().SetMode(BtAudio::Mode::kMode1);
+        // 走的时候一律回模式 1,不然小智对话没声(音箱没麦)。断电重启才掐得断链路。
+        BtAudio::GetInstance().ResetToMode1();
     }
     Application::GetInstance().RestoreSystemAudioAfterStressTest();
     vTaskDelete(nullptr);

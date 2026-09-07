@@ -59,6 +59,10 @@ public:
     void MusicLink();                         // AT+BTSCO=0 → AT+PP=1(A2DP)
     void CallLink();                          // AT+PP=1 → AT+BTSCO=1(SCO)
     void PowerReset();                        // BT_POWER 断电再上电,状态清零
+    // 断电重启后再设模式 1。从模式 2 且 A2DP 链路还活着的状态直接发 AT+MODE=1,
+    // 模块不放手,声音还在蓝牙音箱上出(2026-09-07 实测)。断电是唯一确定能把链路
+    // 掐掉的办法,开机就是这条路,所以结果和刚开机一样。
+    void ResetToMode1();
 
     Mode mode() const;
     Conn conn() const;
