@@ -97,9 +97,9 @@ std::atomic<uint32_t> s_gen{0};
 
 MusicPlayer* s_player = nullptr;
 int  s_bt_listener = 0;
-// Audiobar 自己把模块切到模式 2 的话,退出时切回模式 1,小智对话才正常;
-// 用户在设置页手动切的就不动。
-bool s_bt_switched_here = false;
+// 蓝牙音箱只是 Audiobar 的输出。麦克风也在那颗蓝牙芯片上,模式 2 会把收音也甩给外设,
+// 音箱没麦小智就聋了(2026-09-07 实测)。所以离开 Audiobar 一律回模式 1,不管是谁切过去的,
+// 厂商的音乐 App 也是这么做的。下次进来 SCAN 再连(模块会自己 RECONNECT 上次的设备)。
 // 这次连接有没有发过音乐链路序列。手动流程里用户是连上几秒后才点「音乐模式」,
 // 且只点一次;这里照做:CONNECT SUCCESS 后等 1.5 秒发一次,连接状态一变就清零。
 std::atomic<bool> s_bt_linked{false};
@@ -330,7 +330,6 @@ void AsyncBtConnected(void* p) {
 void BtScanTask(void*) {
     auto& bt = BtAudio::GetInstance();
     if (bt.mode() != BtAudio::Mode::kMode2) {
-        s_bt_switched_here = true;
         bt.SetMode(BtAudio::Mode::kMode2);
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
@@ -348,10 +347,7 @@ void OnScan(lv_event_t*) {
 
 void OnPickSpeaker(lv_event_t*) {
     auto& bt = BtAudio::GetInstance();
-    if (bt.mode() != BtAudio::Mode::kMode1) {
-        bt.SetMode(BtAudio::Mode::kMode1);
-        s_bt_switched_here = false;
-    }
+    if (bt.mode() != BtAudio::Mode::kMode1) bt.SetMode(BtAudio::Mode::kMode1);
     RefreshBt();
     CloseSheet();
 }
@@ -500,9 +496,8 @@ void EnterTask(void*) {
 }
 void LeaveTask(void*) {
     if (s_player) s_player->Shutdown();
-    if (s_bt_switched_here) {
-        // 是我们把模块切去模式 2 的,走的时候切回模式 1,不然小智对话没声
-        s_bt_switched_here = false;
+    if (BtAudio::GetInstance().mode() != BtAudio::Mode::kMode1) {
+        // 走的时候一律回模式 1,不然小智对话没声(音箱没麦)
         BtAudio::GetInstance().SetMode(BtAudio::Mode::kMode1);
     }
     Application::GetInstance().RestoreSystemAudioAfterStressTest();
