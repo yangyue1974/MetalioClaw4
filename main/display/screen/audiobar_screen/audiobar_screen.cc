@@ -84,6 +84,7 @@ struct Ui {
     lv_obj_t* sheet_list = nullptr;
     lv_obj_t* sheet_spk_dot = nullptr;
     lv_timer_t* sheet_close_timer = nullptr;
+    lv_timer_t* link_timer = nullptr;   // CONNECT SUCCESS 之后延时发音乐链路
     lv_obj_t* rows[kLibCount] = {};
     lv_obj_t* index[kLibCount] = {};
     lv_obj_t* names[kLibCount] = {};
@@ -99,6 +100,9 @@ int  s_bt_listener = 0;
 // Audiobar 自己把模块切到模式 2 的话,退出时切回模式 1,小智对话才正常;
 // 用户在设置页手动切的就不动。
 bool s_bt_switched_here = false;
+// 这次连接有没有发过音乐链路序列。手动流程里用户是连上几秒后才点「音乐模式」,
+// 且只点一次;这里照做:CONNECT SUCCESS 后等 1.5 秒发一次,连接状态一变就清零。
+std::atomic<bool> s_bt_linked{false};
 
 // 进度由音频任务写、LVGL 定时器读。绝不让音频任务碰 LVGL。
 std::atomic<int> s_prog_elapsed{0};
@@ -299,10 +303,22 @@ void OnSheetAutoClose(lv_timer_t*) {
     CloseSheet();
 }
 
+void OnLinkTimer(lv_timer_t*) {
+    if (s_ui.link_timer) { lv_timer_delete(s_ui.link_timer); s_ui.link_timer = nullptr; }
+    auto& bt = BtAudio::GetInstance();
+    if (!bt.OutputIsBluetooth() || s_bt_linked.load()) return;
+    s_bt_linked.store(true);
+    ESP_LOGI(TAG, "bt connected, sending music link");
+    bt.MusicLink();
+}
+
 void AsyncBtConnected(void* p) {
     if ((uint32_t)(uintptr_t)p != s_gen.load() || !Alive()) return;
-    // 连上默认是什么链路厂商没写;照设置页「音乐模式」的序列走一遍,实测这么用是通的。
-    BtAudio::GetInstance().MusicLink();
+    // 连上默认是什么链路厂商没写;照设置页「音乐模式」的序列走一遍(实测手动这么点是通的),
+    // 但不要贴着 CONNECT SUCCESS 立刻发,给模块 1.5 秒把 A2DP 链路立起来。
+    if (!s_ui.link_timer && !s_bt_linked.load()) {
+        s_ui.link_timer = lv_timer_create(OnLinkTimer, 1500, nullptr);
+    }
     RefreshBt();
     if (s_ui.sheet && !s_ui.sheet_close_timer) {
         s_ui.sheet_close_timer = lv_timer_create(OnSheetAutoClose, 900, nullptr);
@@ -470,6 +486,7 @@ void GoHome() {
 void OnDelete(lv_event_t*) {
     if (s_ui.progress_timer) { lv_timer_delete(s_ui.progress_timer); }
     if (s_ui.sheet_close_timer) { lv_timer_delete(s_ui.sheet_close_timer); }
+    if (s_ui.link_timer) { lv_timer_delete(s_ui.link_timer); }
     if (s_bt_listener) { BtAudio::GetInstance().RemoveListener(s_bt_listener); s_bt_listener = 0; }
     s_ui = Ui{};
     s_gen.fetch_add(1);
@@ -625,8 +642,13 @@ lv_obj_t* AudiobarScreen::Create() {
     if (s_bt_listener == 0) {
         s_bt_listener = BtAudio::GetInstance().AddListener([](BtAudio::Event ev, const std::string&) {
             void* g = (void*)(uintptr_t)s_gen.load();
-            if (ev == BtAudio::Event::kConnected) lv_async_call(AsyncBtConnected, g);
-            else lv_async_call(AsyncRefreshBt, g);
+            if (ev == BtAudio::Event::kConnected) {
+                lv_async_call(AsyncBtConnected, g);
+            } else {
+                // 连接状态一变(重连 / 断开 / 切模式)就允许下一次连上再发一次链路序列
+                if (ev != BtAudio::Event::kLine && ev != BtAudio::Event::kDeviceFound) s_bt_linked.store(false);
+                lv_async_call(AsyncRefreshBt, g);
+            }
         });
     }
     RefreshBt();
